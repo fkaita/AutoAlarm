@@ -8,9 +8,12 @@ import androidx.core.app.ActivityCompat;
 import android.Manifest;
 import android.app.Activity;
 import android.app.SearchManager;
+import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.database.Cursor;
+import android.database.sqlite.SQLiteDatabase;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
@@ -32,6 +35,7 @@ import android.widget.Toast;
 
 import java.io.File;
 import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
@@ -40,22 +44,29 @@ import java.util.Locale;
 
 public class MainActivity extends AppCompatActivity implements SensorEventListener {
     private SensorManager sensorManager;
-    private Sensor sensor;
+    Sensor accelerometer;
+    Sensor magnetometer;
+    private Sensor sensorRt;
+    private Sensor sensorAc;
     private TextView textView;
-    private float sensorX;
-    private float sensorY;
-    private float sensorZ;
+    private float accelX;
+    private float accelY;
+    private float accelZ;
+    private float rotationX;
+    private float rotationY;
+    private float rotationZ;
     // 'Handler()' is deprecated as of API 30: Android 11.0 (R)
     private final android.os.Handler handler = new Handler(Looper.getMainLooper());
     private final int period = 100;
     private Runnable runnable;
-    private List<String> data;
     private List<String> slicedData;
     private Switch switchRec;
     private TextView message;
     private TextView txtClass;
     private SoundPool soundPool;
     private int soundOne;
+    private TestOpenHelper helper;
+    private SQLiteDatabase db;
 
     private static final int PERMISSION_WRITE_EX_STR = 1;
 
@@ -78,9 +89,48 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
                                 SimpleDateFormat formatter= new SimpleDateFormat("yyyy-MM-dd");
                                 String time = "Data saved on " + formatter.format(date) + "\n";
                                 outputStream.write(time.getBytes());
-                                for (int i=0; i<data.size(); i++) {
-                                    outputStream.write(data.get(i).getBytes());
+
+                                if(helper == null){
+                                    helper = new TestOpenHelper(getApplicationContext());
                                 }
+
+                                if(db == null){
+                                    db = helper.getReadableDatabase();
+                                }
+                                Log.d("debug","**********Cursor");
+
+                                Cursor cursor = db.query(
+                                        "testdb",
+                                        new String[] { "time", "rotX", "rotY", "rotZ", "accX", "accY", "accZ" },
+                                        null,
+                                        null,
+                                        null,
+                                        null,
+                                        null
+                                );
+
+                                cursor.moveToFirst();
+                                for (int i = 0; i < cursor.getCount(); i++) {
+                                    StringBuilder sbuilder = new StringBuilder();
+                                    sbuilder.append(cursor.getString(0));
+                                    sbuilder.append(", ");
+                                    sbuilder.append(cursor.getString(1));
+                                    sbuilder.append(", ");
+                                    sbuilder.append(cursor.getString(2));
+                                    sbuilder.append(", ");
+                                    sbuilder.append(cursor.getString(3));
+                                    sbuilder.append(", ");
+                                    sbuilder.append(cursor.getString(4));
+                                    sbuilder.append(", ");
+                                    sbuilder.append(cursor.getString(5));
+                                    sbuilder.append(", ");
+                                    sbuilder.append(cursor.getString(6));
+                                    sbuilder.append("\n");
+                                    outputStream.write(sbuilder.toString().getBytes());
+                                    cursor.moveToNext();
+                                }
+                                // 忘れずに！
+                                cursor.close();
                             }
 
                         } catch(Exception e){
@@ -96,9 +146,9 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        data = new ArrayList<String>();
         slicedData = new ArrayList<String>();
         sensorManager = (SensorManager) getSystemService(Context.SENSOR_SERVICE);
+
         textView = findViewById(R.id.txtView);
         txtClass = findViewById(R.id.txtClass);
         timerSet();
@@ -152,12 +202,19 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
             @Override
             public void onClick(View v) {
                 if (switchRec.isChecked()){
-                    data.clear();
+                    if(helper == null){
+                        helper = new TestOpenHelper(getApplicationContext());
+                    }
+                    if(db == null){
+                        db = helper.getWritableDatabase();
+                        helper.onUpgrade(db, 0,1);
+                    }
+
                     message.setText("Recording");
                 } else{
                     message.setText("");
-                    Date date=new Date();
-                    SimpleDateFormat formatter= new SimpleDateFormat("yyyy-MM-dd HH-mm-ss");
+                    Date date = new Date();
+                    SimpleDateFormat formatter = new SimpleDateFormat("yyyy-MM-dd HH-mm-ss"); //ACTION_CREATE_DOCUMENT
                     String time = formatter.format(date);
                     String fileName = time + ".txt";
                     Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
@@ -168,7 +225,6 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
                 }
             }
         });
-
     }
 
     @Override
@@ -199,10 +255,15 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
     @Override
     protected void onResume() {
         super.onResume();
-        sensor = sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR);
+//        sensorManager.registerListener(this, accelerometer, SensorManager.SENSOR_DELAY_UI);
+//        sensorManager.registerListener(this, magnetometer, SensorManager.SENSOR_DELAY_UI);
 
-        if (sensor!=null){
-            sensorManager.registerListener((SensorEventListener) this, sensor, SensorManager.SENSOR_DELAY_NORMAL);
+        sensorRt = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
+        sensorAc = sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR);
+
+        if (sensorRt!=null & sensorAc!=null){
+            sensorManager.registerListener((SensorEventListener) this, sensorRt, SensorManager.SENSOR_DELAY_NORMAL);
+            sensorManager.registerListener((SensorEventListener) this, sensorAc, SensorManager.SENSOR_DELAY_NORMAL);
         }else{
             String ns = "No Support";
             textView.setText(ns);
@@ -220,13 +281,24 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
         handler.removeCallbacks(runnable);
     }
 
+    float[] mGravity;
+    float[] mGeomagnetic;
     @Override
     public void onSensorChanged(SensorEvent event) {
         Log.d("debug", "onSensorChanged");
-        if (event.sensor.getType() == Sensor.TYPE_ROTATION_VECTOR) {
-            sensorX = event.values[0];
-            sensorY = event.values[1];
-            sensorZ = event.values[2];
+        switch (event.sensor.getType()) {
+            case Sensor.TYPE_ROTATION_VECTOR:
+                rotationX = event.values[0];
+                rotationY = event.values[1];
+                rotationZ = event.values[2];
+                break;
+            case Sensor.TYPE_ACCELEROMETER:
+                accelX = event.values[0];
+                accelY = event.values[1];
+                accelZ = event.values[2];
+                break;
+            default:
+                break;
         }
     }
 
@@ -238,35 +310,58 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
         runnable = new Runnable() {
             @Override
             public void run() {
-                String strTmp = String.format(Locale.US, "%f, %f, %f\n",
-                        sensorX, sensorY, sensorZ);
-                Date date=new Date();
+                Date date = new Date();
                 SimpleDateFormat formatter= new SimpleDateFormat("HH:mm:ss");
                 String time=formatter.format(date);
-                String s="";
-                s=time+","+Float.toString(sensorX) +","+Float.toString(sensorY)+","+Float.toString(sensorZ)+"\n";
+                String s = "";
+                String rotX = Float.toString(rotationX);
+                String rotY = Float.toString(rotationY);
+                String rotZ = Float.toString(rotationZ);
+                String accX = Float.toString(accelX);
+                String accY = Float.toString(accelY);
+                String accZ = Float.toString(accelZ);
+                s = time+"\n"+rotX +","+rotY+","+rotZ+"\n" + accX +","+accY+","+accZ+"\n";
                 textView.setText(s);
-                if (slicedData.size()<30) {
-                    slicedData.add(Float.toString(sensorX));
-                    slicedData.add(Float.toString(sensorY));
-                    slicedData.add(Float.toString(sensorZ));
-                    if (slicedData.size()==30) {
-//                        String str = slicedData.toString();
+                if (db!=null) {
+                    insertData(db, time, rotX, rotY, rotZ, accX, accY, accZ);
+                }
+
+                if (slicedData.size()<60) {
+                    slicedData.add(rotX);
+                    slicedData.add(rotY);
+                    slicedData.add(rotZ);
+                    slicedData.add(accX);
+                    slicedData.add(accY);
+                    slicedData.add(accZ);
+                    if (slicedData.size()==60) {
+                        String str = slicedData.toString();
                         int estimation = SVC.main(slicedData);
                         txtClass.setText(String.valueOf(estimation));
                         if (estimation == 1) {
-                            soundPool.play(soundOne, 1.0f, 1.0f, 0, 0, 1);
+                            // Play sound if sleeping
+//                            soundPool.play(soundOne, 1.0f, 1.0f, 0, 0, 1);
                         }
                     }
                 }else {
                     slicedData = new ArrayList<String>();
                 }
-
-                data.add(s);
                 handler.postDelayed(this, period);
             }
         };
         handler.post(runnable);
+    }
+
+    private void insertData(SQLiteDatabase db, String time, String rotX, String rotY, String rotZ, String accX, String accY, String accZ){
+        ContentValues values = new ContentValues();
+        values.put("time", time);
+        values.put("rotX", rotX);
+        values.put("rotY", rotY);
+        values.put("rotZ", rotZ);
+        values.put("accX", accX);
+        values.put("accY", accY);
+        values.put("accZ", accZ);
+
+        db.insert("testdb", null, values);
     }
 
 }
